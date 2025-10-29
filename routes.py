@@ -69,32 +69,36 @@ def create_routes(app: FastAPI):
                 event_data = payload
                 timestamp = str(request.headers.get("date", "Unknown Time"))
             
-            # Create email subject
-            email_subject = f"Webhook Notification: {event_type}"
+            # Extract repository name from payload (common field names)
+            repository_name = "Unknown Repository"
+            if isinstance(event_data, dict):
+                repository_name = (
+                    event_data.get("repository", {}).get("name") or
+                    event_data.get("repo", {}).get("name") or
+                    event_data.get("repository_name") or
+                    event_data.get("repo_name") or
+                    "Unknown Repository"
+                )
+            elif isinstance(payload, dict):
+                repository_name = (
+                    payload.get("repository", {}).get("name") or
+                    payload.get("repo", {}).get("name") or
+                    payload.get("repository_name") or
+                    payload.get("repo_name") or
+                    "Unknown Repository"
+                )
             
-            # Format the email body with comprehensive information
+            # Create email subject with event type
+            email_subject = f"{event_type}"
+            
+            # Format the email body with only important information
             email_body = f"""
-            Webhook Event Received
-            
-            Request Information:
-            - Method: {request_method}
-            - URL: {request_url}
-            - Payload Type: {payload_type}
-            - Timestamp: {timestamp}
-            
-            Request Headers:
-            {json.dumps(request_headers, indent=2)}
-            
-            Event Type: {event_type}
-            
-            Full Payload:
-            {payload_str}
-            
-            Extracted Event Data:
-            {json.dumps(event_data, indent=2) if isinstance(event_data, (dict, list)) else str(event_data)}
-            
-            ---
-            This is an automated notification from the webhook system.
+Event: {event_type}
+Repository: {repository_name}
+Time: {timestamp}
+
+---
+This is an automated notification from the webhook system.
             """
             
             # Send email notification
