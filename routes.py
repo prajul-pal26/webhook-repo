@@ -18,26 +18,80 @@ def create_routes(app: FastAPI):
         Receive webhook events from action-repo and send email notification
         """
         try:
-            # Get the webhook payload
-            payload = await request.json()
+            # Get request details for debugging
+            request_method = request.method
+            request_url = str(request.url)
+            request_headers = dict(request.headers)
             
-            # Extract relevant information from payload
-            event_type = payload.get("event_type", "Unknown Event")
-            event_data = payload.get("data", {})
-            timestamp = payload.get("timestamp", "Unknown Time")
+            # Try to get the webhook payload
+            try:
+                payload = await request.json()
+                payload_str = json.dumps(payload, indent=2)
+                payload_type = "JSON"
+            except Exception as json_error:
+                # If JSON parsing fails, try to get raw body
+                try:
+                    body = await request.body()
+                    payload_str = body.decode('utf-8') if body else "Empty body"
+                    payload = {"raw_body": payload_str}
+                    payload_type = "Raw Text"
+                except Exception as body_error:
+                    payload_str = f"Unable to read body: {str(body_error)}"
+                    payload = {"error": payload_str}
+                    payload_type = "Error"
             
-            # Create email subject and body
+            # Extract information from payload (handle different structures)
+            if isinstance(payload, dict):
+                # Try common field names
+                event_type = (
+                    payload.get("event_type") or
+                    payload.get("type") or
+                    payload.get("event") or
+                    payload.get("action") or
+                    "Unknown Event"
+                )
+                
+                event_data = (
+                    payload.get("data") or
+                    payload.get("payload") or
+                    payload.get("body") or
+                    payload
+                )
+                
+                timestamp = (
+                    payload.get("timestamp") or
+                    payload.get("time") or
+                    payload.get("created_at") or
+                    str(request.headers.get("date", "Unknown Time"))
+                )
+            else:
+                event_type = "Unknown Event"
+                event_data = payload
+                timestamp = str(request.headers.get("date", "Unknown Time"))
+            
+            # Create email subject
             email_subject = f"Webhook Notification: {event_type}"
             
-            # Format the email body with webhook data
+            # Format the email body with comprehensive information
             email_body = f"""
             Webhook Event Received
             
-            Event Type: {event_type}
-            Timestamp: {timestamp}
+            Request Information:
+            - Method: {request_method}
+            - URL: {request_url}
+            - Payload Type: {payload_type}
+            - Timestamp: {timestamp}
             
-            Event Data:
-            {json.dumps(event_data, indent=2)}
+            Request Headers:
+            {json.dumps(request_headers, indent=2)}
+            
+            Event Type: {event_type}
+            
+            Full Payload:
+            {payload_str}
+            
+            Extracted Event Data:
+            {json.dumps(event_data, indent=2) if isinstance(event_data, (dict, list)) else str(event_data)}
             
             ---
             This is an automated notification from the webhook system.
@@ -46,11 +100,16 @@ def create_routes(app: FastAPI):
             # Send email notification
             email_sent = send_simple_email(email_subject, email_body)
             
-            # Prepare response
+            # Prepare response with debugging info
             response_data = {
                 "status": "success",
                 "message": "Webhook received successfully",
-                "email_sent": email_sent
+                "email_sent": email_sent,
+                "debug_info": {
+                    "payload_type": payload_type,
+                    "event_type": event_type,
+                    "payload_keys": list(payload.keys()) if isinstance(payload, dict) else "Not a dict"
+                }
             }
             
             if not email_sent:
