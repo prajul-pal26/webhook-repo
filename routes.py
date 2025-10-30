@@ -1,8 +1,8 @@
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
-from typing import Dict, Any
-import json
 from utils import send_simple_email
+from datetime import datetime
+
 
 def create_routes(app: FastAPI):
     """Create and register all API routes"""
@@ -15,136 +15,132 @@ def create_routes(app: FastAPI):
     @app.post("/webhook")
     async def receive_webhook(request: Request):
         """
-        Receive webhook events from action-repo and send email notification
+        Receive webhook events and send email notification
         """
         try:
-            # Get request details for debugging
-            request_method = request.method
-            request_url = str(request.url)
-            request_headers = dict(request.headers)
+            payload = await request.json()
             
-            # Try to get the webhook payload
-            try:
-                payload = await request.json()
-                payload_str = json.dumps(payload, indent=2)
-                payload_type = "JSON"
-            except Exception as json_error:
-                # If JSON parsing fails, try to get raw body
-                try:
-                    body = await request.body()
-                    payload_str = body.decode('utf-8') if body else "Empty body"
-                    payload = {"raw_body": payload_str}
-                    payload_type = "Raw Text"
-                except Exception as body_error:
-                    payload_str = f"Unable to read body: {str(body_error)}"
-                    payload = {"error": payload_str}
-                    payload_type = "Error"
+            # Extract event information with fallbacks
+            event_type = (
+                payload.get("event_type") or
+                payload.get("type") or
+                payload.get("event") or
+                payload.get("action") or
+                "Unknown Event"
+            )
             
-            # Extract information from payload (handle different structures)
-            if isinstance(payload, dict):
-                # Try common field names
-                event_type = (
-                    payload.get("event_type") or
-                    payload.get("type") or
-                    payload.get("event") or
-                    payload.get("action") or
-                    "Unknown Event"
-                )
-                
-                event_data = (
-                    payload.get("data") or
-                    payload.get("payload") or
-                    payload.get("body") or
-                    payload
-                )
-                
-                timestamp = (
-                    payload.get("timestamp") or
-                    payload.get("time") or
-                    payload.get("created_at") or
-                    str(request.headers.get("date", "Unknown Time"))
-                )
-            else:
-                event_type = "Unknown Event"
-                event_data = payload
-                timestamp = str(request.headers.get("date", "Unknown Time"))
-            
-            # Extract repository name from payload (common field names)
+            # Extract repository information
             repository_name = "Unknown Repository"
-            if isinstance(event_data, dict):
-                repository_name = (
-                    event_data.get("repository", {}).get("name") or
-                    event_data.get("repo", {}).get("name") or
-                    event_data.get("repository_name") or
-                    event_data.get("repo_name") or
-                    "Unknown Repository"
-                )
-            elif isinstance(payload, dict):
-                repository_name = (
-                    payload.get("repository", {}).get("name") or
-                    payload.get("repo", {}).get("name") or
-                    payload.get("repository_name") or
-                    payload.get("repo_name") or
-                    "Unknown Repository"
-                )
+            if "repository" in payload and isinstance(payload["repository"], dict):
+                repository_name = payload["repository"].get("name", "Unknown Repository")
+            elif "repo" in payload and isinstance(payload["repo"], dict):
+                repository_name = payload["repo"].get("name", "Unknown Repository")
+            elif "repository_name" in payload:
+                repository_name = payload["repository_name"]
             
-            # Create email subject with event type
-            email_subject = f"{event_type}"
+            # Extract additional useful information
+            commit_info = ""
+            if "commits" in payload and payload["commits"]:
+                commit = payload["commits"][0]
+                commit_id = commit.get("id", "")[:8] if commit.get("id") else ""
+                commit_message = commit.get("message", "No message")
+                commit_author = commit.get("author", {}).get("name", "Unknown") if commit.get("author") else "Unknown"
+                commit_info = f"""
+                <tr>
+                    <td style="padding: 10px 15px; font-weight: bold;">Latest Commit:</td>
+                    <td style="padding: 10px 15px;">{commit_id} - {commit_message[:50]}{'...' if len(commit_message) > 50 else ''}</td>
+                </tr>
+                <tr style="background-color: #e8f0fe;">
+                    <td style="padding: 10px 15px; font-weight: bold;">Author:</td>
+                    <td style="padding: 10px 15px;">{commit_author}</td>
+                </tr>
+                """
             
-            # Format the email body with only important information
+            # Extract branch information
+            branch = "Unknown Branch"
+            if "ref" in payload:
+                ref = payload["ref"]
+                if ref.startswith("refs/heads/"):
+                    branch = ref.replace("refs/heads/", "")
+                else:
+                    branch = ref
+            elif "branch" in payload:
+                branch = payload["branch"]
+            
+            # Extract sender/actor information
+            sender = "Unknown User"
+            if "sender" in payload and isinstance(payload["sender"], dict):
+                sender = payload["sender"].get("login", "Unknown User")
+            elif "actor" in payload and isinstance(payload["actor"], dict):
+                sender = payload["actor"].get("login", "Unknown User")
+            elif "pusher" in payload and isinstance(payload["pusher"], dict):
+                sender = payload["pusher"].get("name", "Unknown User")
+            
+            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            # Create a more descriptive email subject
+            email_subject = f"[{event_type}] {repository_name}"
+            
+            # Create a more detailed and professional email body
             email_body = f"""
-Event: {event_type}
-Repository: {repository_name}
-Time: {timestamp}
-
----
-This is an automated notification from the webhook system.
+            <html>
+            <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+                <div style="max-width: 600px; margin: auto; padding: 20px; border-radius: 12px; background: #f9fafb; box-shadow: 0 2px 6px rgba(0,0,0,0.1);">
+                <h2 style="color: #1a73e8; text-align: center;">📢 Repository Activity Notification</h2>
+                
+                <table style="width: 100%; border-collapse: collapse; margin-top: 20px;">
+                    <tr style="background-color: #e8f0fe;">
+                    <td style="padding: 10px 15px; font-weight: bold;">Event Type:</td>
+                    <td style="padding: 10px 15px;">{event_type}</td>
+                    </tr>
+                    <tr>
+                    <td style="padding: 10px 15px; font-weight: bold;">Repository:</td>
+                    <td style="padding: 10px 15px;">{repository_name}</td>
+                    </tr>
+                    <tr style="background-color: #e8f0fe;">
+                    <td style="padding: 10px 15px; font-weight: bold;">Branch:</td>
+                    <td style="padding: 10px 15px;">{branch}</td>
+                    </tr>
+                    <tr>
+                    <td style="padding: 10px 15px; font-weight: bold;">Triggered By:</td>
+                    <td style="padding: 10px 15px;">{sender}</td>
+                    </tr>
+                    {commit_info}
+                    <tr style="background-color: #e8f0fe;">
+                    <td style="padding: 10px 15px; font-weight: bold;">Timestamp:</td>
+                    <td style="padding: 10px 15px;">{current_time}</td>
+                    </tr>
+                </table>
+                
+                <div style="margin-top: 25px; padding: 15px; background-color: #f0f7ff; border-radius: 8px; border-left: 4px solid #1a73e8;">
+                    <p style="margin: 0; font-size: 14px; color: #555;">
+                        <strong>📋 Summary:</strong> A <em>{event_type.lower()}</em> event was triggered in the <strong>{repository_name}</strong> repository
+                        {f'on the <strong>{branch}</strong> branch' if branch != 'Unknown Branch' else ''}.
+                        {f' This action was performed by <strong>{sender}</strong>.' if sender != 'Unknown User' else ''}
+                    </p>
+                </div>
+                
+                <p style="text-align: center; color: #666; margin-top: 25px; font-size: 13px;">
+                    ⏱️ This notification was automatically generated by your webhook system.
+                </p>
+                </div>
+            </body>
+            </html>
             """
             
-            # Send email notification
             email_sent = send_simple_email(email_subject, email_body)
-            
-            # Prepare response with debugging info
-            response_data = {
-                "status": "success",
-                "message": "Webhook received successfully",
-                "email_sent": email_sent,
-                "debug_info": {
-                    "payload_type": payload_type,
-                    "event_type": event_type,
-                    "payload_keys": list(payload.keys()) if isinstance(payload, dict) else "Not a dict"
-                }
-            }
-            
-            if not email_sent:
-                response_data["warning"] = "Webhook processed but email notification failed"
             
             return JSONResponse(
                 status_code=200,
-                content=response_data
+                content={
+                    "status": "success",
+                    "message": "Webhook received successfully",
+                    "email_sent": email_sent,
+                    "event_type": event_type,
+                    "repository": repository_name
+                }
             )
         
         except Exception as e:
-            # Log the error and send error notification email
-            error_subject = "Webhook Processing Error"
-            error_body = f"""
-            An error occurred while processing webhook:
-            
-            Error: {str(e)}
-            
-            Request details:
-            Method: {request.method}
-            URL: {request.url}
-            Headers: {dict(request.headers)}
-            
-            Please check the webhook system for issues.
-            """
-            
-            # Try to send error notification
-            try:
-                send_simple_email(error_subject, error_body)
-            except:
-                pass  # Don't let email errors break the error response
-            
             raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
